@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from transformers import SiglipModel, SiglipProcessor, AutoModel, AutoTokenizer
+from transformers import SiglipModel, SiglipProcessor, AutoModel, AutoTokenizer, AutoProcessor
 import wandb
 from PIL import Image
 import pandas as pd
@@ -32,9 +32,9 @@ def parse_args():
     parser.add_argument('--data_path', type=str, default='train.csv', help='Path to data CSV')
     parser.add_argument('--project_name', type=str, default='knee-siglip', help='Wandb project name')
     parser.add_argument('--experiment_name', type=str, default=None, help='Wandb experiment name')
-    parser.add_argument('--image_size', type=int, choices=[224, 448], default=224, help='Image resolution (224 or 448)')
+    parser.add_argument('--image_size', type=int, choices=[224, 384, 512], default=224, help='Image resolution (224, 384, or 512)')
     parser.add_argument('--temperature', type=float, default=0.07, help='Temperature for contrastive learning')
-    parser.add_argument('--max_text_length', type=int, default=512, help='Maximum text length for tokenization')
+    parser.add_argument('--max_text_length', type=int, default=64, help='Maximum text length for tokenization')
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints', help='Directory to save checkpoints')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Gradient accumulation steps')
     parser.add_argument('--mixed_precision', action='store_true', help='Use mixed precision training')
@@ -46,6 +46,9 @@ class KneeXrayDataset(Dataset):
         self.processor = processor
         self.image_size = image_size
         self.max_text_length = max_text_length
+        
+        # Get tokenizer from processor for text processing
+        self.tokenizer = processor.tokenizer
         
         # Filter out rows with missing image paths or impressions
         self.df = self.df.dropna(subset=['img_path', 'impression'])
@@ -63,21 +66,33 @@ class KneeXrayDataset(Dataset):
             # Load and process image
             image = Image.open(img_path).convert('RGB')
             
-            # Process image and text
-            inputs = self.processor(
-                text=impression,
+            # Resize image to the target size
+            image = image.resize((self.image_size, self.image_size), Image.LANCZOS)
+            
+            # Process image separately
+            image_inputs = self.processor(
                 images=image,
+                return_tensors="pt"
+            )
+            
+            # Process text using tokenizer directly
+            text_inputs = self.tokenizer(
+                impression,
                 return_tensors="pt",
                 padding="max_length",
                 truncation=True,
-                max_length=self.max_text_length,
-                size={"height": self.image_size, "width": self.image_size}
+                max_length=self.max_text_length
             )
             
+            # Create attention mask manually (SigLIP tokenizer doesn't provide it)
+            input_ids = text_inputs['input_ids']
+            # For SigLIP, pad_token_id is 1
+            attention_mask = (input_ids != 1).long()
+            
             return {
-                'pixel_values': inputs['pixel_values'].squeeze(0),
-                'input_ids': inputs['input_ids'].squeeze(0),
-                'attention_mask': inputs['attention_mask'].squeeze(0),
+                'pixel_values': image_inputs['pixel_values'].squeeze(0),
+                'input_ids': input_ids.squeeze(0),
+                'attention_mask': attention_mask.squeeze(0),
                 'image_path': img_path,
                 'text': impression
             }
@@ -88,20 +103,30 @@ class KneeXrayDataset(Dataset):
             dummy_image = Image.new('RGB', (self.image_size, self.image_size), color='black')
             dummy_text = "Normal knee X-ray"
             
-            inputs = self.processor(
-                text=dummy_text,
+            # Process dummy image separately
+            image_inputs = self.processor(
                 images=dummy_image,
+                return_tensors="pt"
+            )
+            
+            # Process dummy text using tokenizer directly
+            text_inputs = self.tokenizer(
+                dummy_text,
                 return_tensors="pt",
                 padding="max_length",
                 truncation=True,
-                max_length=self.max_text_length,
-                size={"height": self.image_size, "width": self.image_size}
+                max_length=self.max_text_length
             )
             
+            # Create attention mask manually (SigLIP tokenizer doesn't provide it)
+            input_ids = text_inputs['input_ids']
+            # For SigLIP, pad_token_id is 1
+            attention_mask = (input_ids != 1).long()
+            
             return {
-                'pixel_values': inputs['pixel_values'].squeeze(0),
-                'input_ids': inputs['input_ids'].squeeze(0),
-                'attention_mask': inputs['attention_mask'].squeeze(0),
+                'pixel_values': image_inputs['pixel_values'].squeeze(0),
+                'input_ids': input_ids.squeeze(0),
+                'attention_mask': attention_mask.squeeze(0),
                 'image_path': img_path,
                 'text': dummy_text
             }
@@ -406,7 +431,7 @@ def main():
     # Initialize processor
     model_name = f"google/siglip-base-patch16-{args.image_size}"
     print(f"Loading SigLIP processor: {model_name}")
-    processor = SiglipProcessor.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(model_name)
     
     # Create datasets
     train_dataset = KneeXrayDataset(

@@ -20,7 +20,7 @@ def parse_args():
     parser.add_argument('--model_path', type=str, required=True, help='Path to trained model checkpoint')
     parser.add_argument('--image_path', type=str, help='Path to single image for inference')
     parser.add_argument('--csv_path', type=str, help='Path to CSV file for batch inference')
-    parser.add_argument('--image_size', type=int, choices=[224, 448], default=224, help='Image resolution')
+    parser.add_argument('--image_size', type=int, choices=[224, 384, 512], default=224, help='Image resolution')
     parser.add_argument('--output_path', type=str, default='inference_results.csv', help='Output CSV path')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for inference')
     parser.add_argument('--max_text_length', type=int, default=512, help='Maximum text length')
@@ -43,11 +43,13 @@ class InferenceDataset(torch.utils.data.Dataset):
         try:
             image = Image.open(img_path).convert('RGB')
             
+            # Resize image to the target size
+            image = image.resize((self.image_size, self.image_size), Image.LANCZOS)
+            
             # Process image
             inputs = self.processor(
                 images=image,
-                return_tensors="pt",
-                size={"height": self.image_size, "width": self.image_size}
+                return_tensors="pt"
             )
             
             return {
@@ -62,8 +64,7 @@ class InferenceDataset(torch.utils.data.Dataset):
             dummy_image = Image.new('RGB', (self.image_size, self.image_size), color='black')
             inputs = self.processor(
                 images=dummy_image,
-                return_tensors="pt",
-                size={"height": self.image_size, "width": self.image_size}
+                return_tensors="pt"
             )
             
             return {
@@ -90,11 +91,13 @@ def single_image_inference(model, processor, image_path, text_queries, device, i
     results = []
     
     with torch.no_grad():
+        # Resize image to the target size
+        image = image.resize((image_size, image_size), Image.LANCZOS)
+        
         # Process image once
         image_inputs = processor(
             images=image,
-            return_tensors="pt",
-            size={"height": image_size, "width": image_size}
+            return_tensors="pt"
         )
         pixel_values = image_inputs['pixel_values'].to(device)
         
