@@ -47,9 +47,23 @@ class KneeXrayDataset(Dataset):
         self.image_size = image_size
         self.max_text_length = max_text_length
         
-        # Filter out rows with missing image paths or impressions
-        self.df = self.df.dropna(subset=['img_path', 'impression'])
-        self.df = self.df[self.df['label'] != 4].reset_index(drop=True)
+        # Filter out rows with missing impressions
+        self.df = self.df.dropna(subset=['impression'])
+        
+        # Filter by label if the column exists
+        if 'label' in self.df.columns:
+            self.df = self.df[self.df['label'] == 1].reset_index(drop=True)
+            print(f"Filtered to samples with label == 1")
+        else:
+            print(f"No 'label' column found, using all samples")
+            self.df = self.df.reset_index(drop=True)
+        
+        # Count valid image paths for each view
+        image_columns = ['ap', 'pa_rosen', 'skyline', 'lat1', 'lat2']
+        for col in image_columns:
+            valid_count = self.df[col].notna().sum() if col in self.df.columns else 0
+            print(f"Valid {col} images: {valid_count}")
+        
         print(f"Dataset size after filtering: {len(self.df)}")
         
     def __len__(self):
@@ -57,15 +71,57 @@ class KneeXrayDataset(Dataset):
     
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = row['img_path']
+        
+        # Get paths for different X-ray views
+        ap_path = row['ap']
+        pa_path = row['pa_rosen']
+        skyline_path = row['skyline']
+        lat1_path = row['lat1']
+        lat2_path = row['lat2']
+        
         impression = str(row['impression'])
         
         try:
-            # Load and process image
-            image = Image.open(img_path).convert('RGB')
+            # Create a 512x512 mosaic image
+            mosaic = Image.new('RGB', (512, 512), color='black')
             
-            # Resize image to the target size
-            image = image.resize((self.image_size, self.image_size), Image.LANCZOS)
+            # Load and process AP image (top-left: 0:256, 0:256)
+            if pd.notna(ap_path) and os.path.exists(ap_path):
+                ap_img = Image.open(ap_path).convert('RGB')
+                ap_img = ap_img.resize((256, 256), Image.LANCZOS)
+                mosaic.paste(ap_img, (0, 0))
+            
+            # Load and process PA image (top-right: 256:512, 0:256)
+            if pd.notna(pa_path) and os.path.exists(pa_path):
+                pa_img = Image.open(pa_path).convert('RGB')
+                pa_img = pa_img.resize((256, 256), Image.LANCZOS)
+                mosaic.paste(pa_img, (256, 0))
+            
+            # Load and process Skyline image (bottom-left: 0:256, 256:512)
+            if pd.notna(skyline_path) and os.path.exists(skyline_path):
+                skyline_img = Image.open(skyline_path).convert('RGB')
+                skyline_img = skyline_img.resize((256, 256), Image.LANCZOS)
+                mosaic.paste(skyline_img, (0, 256))
+            
+            # Load and process Lateral images (bottom-right: 256:512, 256:512)
+            # Each lateral image will be 256 height x 128 width, combined side by side
+            lat_combined = Image.new('RGB', (256, 256), color='black')
+            
+            if pd.notna(lat1_path) and os.path.exists(lat1_path):
+                lat1_img = Image.open(lat1_path).convert('RGB')
+                lat1_img = lat1_img.resize((128, 256), Image.LANCZOS)
+                lat_combined.paste(lat1_img, (0, 0))
+            
+            if pd.notna(lat2_path) and os.path.exists(lat2_path):
+                lat2_img = Image.open(lat2_path).convert('RGB')
+                lat2_img = lat2_img.resize((128, 256), Image.LANCZOS)
+                lat_combined.paste(lat2_img, (128, 0))
+            
+            # Paste the combined lateral images to bottom-right
+            mosaic.paste(lat_combined, (256, 256))
+            
+            # Resize the final mosaic image to the target size
+            image = mosaic.resize((self.image_size, self.image_size), Image.LANCZOS)
             
             # Process image separately
             image_inputs = self.processor(
@@ -90,12 +146,19 @@ class KneeXrayDataset(Dataset):
                 'pixel_values': image_inputs['pixel_values'].squeeze(0),
                 'input_ids': input_ids.squeeze(0),
                 'attention_mask': attention_mask.squeeze(0),
-                'image_path': img_path,
+                'image_paths': {
+                    'ap': ap_path,
+                    'pa_rosen': pa_path,
+                    'skyline': skyline_path,
+                    'lat1': lat1_path,
+                    'lat2': lat2_path
+                },
                 'text': impression
             }
             
         except Exception as e:
-            print(f"Error loading image {img_path}: {e}")
+            print(f"Error loading images for index {idx}: {e}")
+            print(f"Image paths - AP: {ap_path}, PA: {pa_path}, Skyline: {skyline_path}, LAT1: {lat1_path}, LAT2: {lat2_path}")
             # Return a dummy item if there's an error
             dummy_image = Image.new('RGB', (self.image_size, self.image_size), color='black')
             dummy_text = "Normal knee X-ray"
@@ -123,7 +186,13 @@ class KneeXrayDataset(Dataset):
                 'pixel_values': image_inputs['pixel_values'].squeeze(0),
                 'input_ids': input_ids.squeeze(0),
                 'attention_mask': attention_mask.squeeze(0),
-                'image_path': img_path,
+                'image_paths': {
+                    'ap': ap_path,
+                    'pa_rosen': pa_path,
+                    'skyline': skyline_path,
+                    'lat1': lat1_path,
+                    'lat2': lat2_path
+                },
                 'text': dummy_text
             }
 
