@@ -524,28 +524,25 @@ def train_model(model, train_loader, val_loader, device, config):
         print(f"Val Loss: {avg_val_loss:.4f}, Val Acc: {avg_val_acc:.4f}")
         print(f"Logit Scale: {criterion.logit_scale.item():.3f}, Logit Bias: {criterion.logit_bias.item():.3f}")
         
-        # Save checkpoint
-        checkpoint = {
-            'epoch': epoch + 1,
-            'model_state_dict': model.state_dict(),
-            'criterion_state_dict': criterion.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'train_loss': avg_train_loss,
-            'val_loss': avg_val_loss,
-            'train_acc': avg_train_acc,
-            'val_acc': avg_val_acc,
-            'config': config
-        }
-        
-        # Save every epoch with accuracy in filename
-        checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}_val_acc_{avg_val_acc:.4f}.pt')
-        torch.save(checkpoint, checkpoint_path)
-        
         # Save best model
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_epoch = epoch
+            
+            # Create checkpoint for best model
+            checkpoint = {
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'criterion_state_dict': criterion.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'train_acc': avg_train_acc,
+                'val_acc': avg_val_acc,
+                'config': config
+            }
+            
             best_checkpoint_path = os.path.join(save_dir, f'best_model_val_acc_{avg_val_acc:.4f}.pt')
             torch.save(checkpoint, best_checkpoint_path)
             torch.save({
@@ -555,7 +552,19 @@ def train_model(model, train_loader, val_loader, device, config):
             print(f"New best model saved! Validation Loss: {avg_val_loss:.4f}, Validation Accuracy: {avg_val_acc:.4f}")
     
     # Save final model
-    torch.save(checkpoint, os.path.join(save_dir, 'final_model.pt'))
+    final_checkpoint = {
+        'epoch': config.epochs,
+        'model_state_dict': model.state_dict(),
+        'criterion_state_dict': criterion.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'train_loss': avg_train_loss,
+        'val_loss': avg_val_loss,
+        'train_acc': avg_train_acc,
+        'val_acc': avg_val_acc,
+        'config': config
+    }
+    torch.save(final_checkpoint, os.path.join(save_dir, 'final_model.pt'))
     torch.save({
         'model': model.state_dict(),
         'criterion': criterion.state_dict()

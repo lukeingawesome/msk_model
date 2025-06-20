@@ -47,10 +47,23 @@ class KneeXrayDataset(Dataset):
         self.image_size = image_size
         self.max_text_length = max_text_length
         
-        # Filter out rows with missing image paths or impressions
-        self.df = self.df.dropna(subset=['img_path', 'impression'])
-        # self.df = self.df[self.df['label'] != 4].reset_index(drop=True) #all
-        self.df = self.df[self.df['label'] == 2].reset_index(drop=True) #all
+        # Filter out rows with missing impressions
+        self.df = self.df.dropna(subset=['impression'])
+        self.df = self.df[self.df['filter'] == 0].reset_index(drop=True)
+        # Filter by label if the column exists
+        if 'label' in self.df.columns:
+            self.df = self.df[self.df['label'] == 1].reset_index(drop=True)
+            print(f"Filtered to samples with label == 1")
+        else:
+            print(f"No 'label' column found, using all samples")
+            self.df = self.df.reset_index(drop=True)
+        
+        # Count valid image paths for each view
+        image_columns = ['ap', 'pa_rosen', 'skyline', 'lat1', 'lat2']
+        for col in image_columns:
+            valid_count = self.df[col].notna().sum() if col in self.df.columns else 0
+            print(f"Valid {col} images: {valid_count}")
+        
         print(f"Dataset size after filtering: {len(self.df)}")
         
     def __len__(self):
@@ -58,15 +71,55 @@ class KneeXrayDataset(Dataset):
     
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = row['img_path']
+        
+        # Get paths for different X-ray views
+        ap_path = row['ap']
+        pa_path = row['pa_rosen']
+        skyline_path = row['skyline']
+        lat1_path = row['lat1']
+        lat2_path = row['lat2']
+        
         impression = str(row['impression'])
         
         try:
-            # Load and process image
-            image = Image.open(img_path).convert('RGB')
+            # Create a 3-channel image by concatenating AP, PA, Skyline as separate channels
+            channels = []
             
-            # Resize image to the target size
-            image = image.resize((self.image_size, self.image_size), Image.LANCZOS)
+            # Load and process AP image as channel 0
+            if pd.notna(ap_path) and os.path.exists(ap_path):
+                ap_img = Image.open(ap_path).convert('L')  # Convert to grayscale
+                ap_img = ap_img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                ap_channel = np.array(ap_img)
+            else:
+                # Create empty channel if image doesn't exist
+                ap_channel = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+            channels.append(ap_channel)
+            
+            # Load and process PA image as channel 1
+            if pd.notna(pa_path) and os.path.exists(pa_path):
+                pa_img = Image.open(pa_path).convert('L')  # Convert to grayscale
+                pa_img = pa_img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                pa_channel = np.array(pa_img)
+            else:
+                # Create empty channel if image doesn't exist
+                pa_channel = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+            channels.append(pa_channel)
+            
+            # Load and process Skyline image as channel 2
+            if pd.notna(skyline_path) and os.path.exists(skyline_path):
+                skyline_img = Image.open(skyline_path).convert('L')  # Convert to grayscale
+                skyline_img = skyline_img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                skyline_channel = np.array(skyline_img)
+            else:
+                # Create empty channel if image doesn't exist
+                skyline_channel = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+            channels.append(skyline_channel)
+            
+            # Stack channels to create 3-channel image (H, W, 3)
+            image_array = np.stack(channels, axis=2)
+            
+            # Convert back to PIL Image
+            image = Image.fromarray(image_array, mode='RGB')
             
             # Process image separately
             image_inputs = self.processor(
@@ -91,12 +144,19 @@ class KneeXrayDataset(Dataset):
                 'pixel_values': image_inputs['pixel_values'].squeeze(0),
                 'input_ids': input_ids.squeeze(0),
                 'attention_mask': attention_mask.squeeze(0),
-                'image_path': img_path,
+                'image_paths': {
+                    'ap': ap_path,
+                    'pa_rosen': pa_path,
+                    'skyline': skyline_path,
+                    'lat1': lat1_path,
+                    'lat2': lat2_path
+                },
                 'text': impression
             }
             
         except Exception as e:
-            print(f"Error loading image {img_path}: {e}")
+            print(f"Error loading images for index {idx}: {e}")
+            print(f"Image paths - AP: {ap_path}, PA: {pa_path}, Skyline: {skyline_path}, LAT1: {lat1_path}, LAT2: {lat2_path}")
             # Return a dummy item if there's an error
             dummy_image = Image.new('RGB', (self.image_size, self.image_size), color='black')
             dummy_text = "Normal knee X-ray"
@@ -124,7 +184,13 @@ class KneeXrayDataset(Dataset):
                 'pixel_values': image_inputs['pixel_values'].squeeze(0),
                 'input_ids': input_ids.squeeze(0),
                 'attention_mask': attention_mask.squeeze(0),
-                'image_path': img_path,
+                'image_paths': {
+                    'ap': ap_path,
+                    'pa_rosen': pa_path,
+                    'skyline': skyline_path,
+                    'lat1': lat1_path,
+                    'lat2': lat2_path
+                },
                 'text': dummy_text
             }
 
