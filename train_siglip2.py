@@ -259,7 +259,7 @@ class KneeRadDinoSigLIPModel(nn.Module):
         self.rad_dino = AutoModel.from_pretrained("microsoft/rad-dino")
         
         # Initialize BiomedVLP medical BERT for text encoding
-        self.medical_bert = AutoModel.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
+        self.medical_bert = AutoModel.from_pretrained("microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext", trust_remote_code=True)
         
         # Simplified architecture: direct projection to common embedding dimension
         # Use 512 as a more conservative embedding dimension
@@ -543,7 +543,8 @@ def train_model(model, train_loader, val_loader, device, config):
                 'config': config
             }
             
-            best_checkpoint_path = os.path.join(save_dir, f'best_model_val_acc_{avg_val_acc:.4f}.pt')
+            # Always use the same filename to overwrite previous best model
+            best_checkpoint_path = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, best_checkpoint_path)
             torch.save({
                 'model': model.state_dict(),
@@ -615,8 +616,8 @@ def main():
     processor = AutoProcessor.from_pretrained(model_name)
     
     # Initialize medical BERT tokenizer
-    print("Loading BiomedVLP-CXR-BERT tokenizer for medical text")
-    medical_tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
+    print("Loading BiomedNLP-BiomedBERT tokenizer for medical text")
+    medical_tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext", trust_remote_code=True)
     
     # Create datasets
     train_dataset = KneeXrayDataset(

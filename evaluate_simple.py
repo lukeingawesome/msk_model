@@ -184,7 +184,7 @@ def main():
     model_name = f"google/siglip-base-patch16-{args.image_size}"
     processor = AutoProcessor.from_pretrained(model_name)
     tokenizer = AutoTokenizer.from_pretrained(
-        "microsoft/BiomedVLP-CXR-BERT-specialized", 
+        "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext", 
         trust_remote_code=True
     )
     

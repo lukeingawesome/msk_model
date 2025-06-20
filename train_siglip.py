@@ -39,6 +39,16 @@ def parse_args():
     parser.add_argument('--mixed_precision', action='store_true', help='Use mixed precision training')
     return parser.parse_args()
 
+def get_oa_prompts(label):
+    if label == 0:
+        return "This is a ap view of a knee x-ray. "
+    elif label == 1:
+        return "This is a pa view of a knee x-ray. "
+    elif label == 2:
+        return "This is a skyline view of a knee x-ray. "
+    else:
+        return "This is a unknown view of a knee x-ray. "
+
 class KneeXrayDataset(Dataset):
     def __init__(self, df, processor, tokenizer, image_size=224, max_text_length=512):
         self.df = df.reset_index(drop=True)
@@ -50,7 +60,7 @@ class KneeXrayDataset(Dataset):
         # Filter out rows with missing image paths or impressions
         self.df = self.df.dropna(subset=['img_path', 'impression'])
         # self.df = self.df[self.df['label'] != 4].reset_index(drop=True) #all
-        self.df = self.df[self.df['label'] == 2].reset_index(drop=True) #all
+        self.df = self.df[self.df['label'] != 4].reset_index(drop=True) #all
         print(f"Dataset size after filtering: {len(self.df)}")
         
     def __len__(self):
@@ -60,6 +70,9 @@ class KneeXrayDataset(Dataset):
         row = self.df.iloc[idx]
         img_path = row['img_path']
         impression = str(row['impression'])
+        label = row['label']
+        oa_prompt = get_oa_prompts(label)
+        impression = oa_prompt + impression
         
         try:
             # Load and process image
@@ -191,7 +204,7 @@ class KneeRadDinoSigLIPModel(nn.Module):
         self.rad_dino = AutoModel.from_pretrained("microsoft/rad-dino")
         
         # Initialize BiomedVLP medical BERT for text encoding
-        self.medical_bert = AutoModel.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
+        self.medical_bert = AutoModel.from_pretrained("microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext", trust_remote_code=True)
         
         # Simplified architecture: direct projection to common embedding dimension
         # Use 512 as a more conservative embedding dimension
@@ -475,7 +488,8 @@ def train_model(model, train_loader, val_loader, device, config):
                 'config': config
             }
             
-            best_checkpoint_path = os.path.join(save_dir, f'best_model_val_acc_{avg_val_acc:.4f}.pt')
+            # Always use the same filename to overwrite previous best model
+            best_checkpoint_path = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, best_checkpoint_path)
             torch.save({
                 'model': model.state_dict(),
@@ -547,8 +561,8 @@ def main():
     processor = AutoProcessor.from_pretrained(model_name)
     
     # Initialize medical BERT tokenizer
-    print("Loading BiomedVLP-CXR-BERT tokenizer for medical text")
-    medical_tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedVLP-CXR-BERT-specialized", trust_remote_code=True)
+    print("Loading BiomedNLP-BiomedBERT tokenizer for medical text")
+    medical_tokenizer = AutoTokenizer.from_pretrained("microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext", trust_remote_code=True)
     
     # Create datasets
     train_dataset = KneeXrayDataset(
