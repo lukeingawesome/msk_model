@@ -22,18 +22,12 @@ print("✅ All libraries imported successfully!")
 
 def parse_arguments():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='Zero-shot evaluation for knee OA classification')
+    parser = argparse.ArgumentParser(description='Zero-shot evaluation for knee OA classification using channel-stacked images')
     
     parser.add_argument('--model_path', 
                        type=str, 
-                       default='/model/workspace/msk/checkpoints/pa/best_model_weights.pt',
+                       default='/model/workspace/msk/checkpoints/ap/best_model_weights.pt',
                        help='Path to the trained model weights')
-    
-    parser.add_argument('--view_position', 
-                       type=str, 
-                       choices=['ap', 'pa_rosen', 'skyline'],
-                       default='pa_rosen',
-                       help='View position to evaluate (ap, pa_rosen, or skyline)')
     
     parser.add_argument('--data_path', 
                        type=str, 
@@ -68,7 +62,6 @@ args = parse_arguments()
 # Configuration - Use parsed arguments
 CONFIG = {
     'model_path': args.model_path,
-    'view_position': args.view_position,
     'data_path': args.data_path,
     'image_size': args.image_size,
     'batch_size': args.batch_size,
@@ -86,10 +79,10 @@ for key, value in CONFIG.items():
 device = torch.device(CONFIG['device'] if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Create output directory with view-specific subdirectory
-view_output_dir = os.path.join(CONFIG['output_dir'], CONFIG['view_position'])
-os.makedirs(view_output_dir, exist_ok=True)
-print(f"Results will be saved to: {view_output_dir}")
+# Create output directory for channel-stacked evaluation
+channel_output_dir = os.path.join(CONFIG['output_dir'], 'channel_stacked')
+os.makedirs(channel_output_dir, exist_ok=True)
+print(f"Results will be saved to: {channel_output_dir}")
 
 # Define custom OA prompts for zero-shot classification
 def get_custom_oa_prompts():
@@ -192,48 +185,95 @@ print(f"🎯 Model ready on {device}")
 
 # Dataset class for evaluation
 class EvaluationDataset(Dataset):
-    def __init__(self, df, processor, image_size=512, view_position='ap'):
-        self.df = df.dropna(subset=[view_position]).reset_index(drop=True)
+    def __init__(self, df, processor, image_size=512):
+        # Filter for rows that have at least one valid image path
+        required_columns = ['ap', 'pa_rosen', 'skyline', 'lat1', 'lat2']
+        available_columns = [col for col in required_columns if col in df.columns]
+        
+        # Keep rows that have at least one non-null image path
+        valid_mask = df[available_columns].notna().any(axis=1)
+        self.df = df[valid_mask].reset_index(drop=True)
+        
         self.processor = processor
         self.image_size = image_size
-        self.view_position = view_position
         
     def __len__(self):
         return len(self.df)
     
+    def create_channel_stacked_image(self, row):
+        """Create a 3-channel image by stacking AP, PA, and Skyline views"""
+        try:
+            # Get image paths
+            ap_path = row.get('ap', None)
+            pa_path = row.get('pa_rosen', None) 
+            skyline_path = row.get('skyline', None)
+            
+            channels = []
+            
+            # Load and process AP image as channel 0
+            if pd.notna(ap_path) and os.path.exists(ap_path):
+                ap_img = Image.open(ap_path).convert('L')  # Convert to grayscale
+                ap_img = ap_img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                ap_channel = np.array(ap_img)
+            else:
+                # Create empty channel if image doesn't exist
+                ap_channel = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+            channels.append(ap_channel)
+            
+            # Load and process PA image as channel 1
+            if pd.notna(pa_path) and os.path.exists(pa_path):
+                pa_img = Image.open(pa_path).convert('L')  # Convert to grayscale
+                pa_img = pa_img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                pa_channel = np.array(pa_img)
+            else:
+                # Create empty channel if image doesn't exist
+                pa_channel = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+            channels.append(pa_channel)
+            
+            # Load and process Skyline image as channel 2
+            if pd.notna(skyline_path) and os.path.exists(skyline_path):
+                skyline_img = Image.open(skyline_path).convert('L')  # Convert to grayscale
+                skyline_img = skyline_img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                skyline_channel = np.array(skyline_img)
+            else:
+                # Create empty channel if image doesn't exist
+                skyline_channel = np.zeros((self.image_size, self.image_size), dtype=np.uint8)
+            channels.append(skyline_channel)
+            
+            # Stack channels to create 3-channel image (H, W, 3)
+            image_array = np.stack(channels, axis=2)
+            
+            # Convert back to PIL Image
+            image = Image.fromarray(image_array, mode='RGB')
+            
+            return image
+            
+        except Exception as e:
+            print(f"Error creating channel-stacked image: {e}")
+            # Return black image on error
+            return Image.new('RGB', (self.image_size, self.image_size), color='black')
+    
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        try:
-            # Load and process image using the specified view position
-            image = Image.open(row[self.view_position]).convert('RGB')
-            image = image.resize((self.image_size, self.image_size), Image.LANCZOS)
-            
-            image_inputs = self.processor(images=image, return_tensors="pt")
-            
-            return {
-                'pixel_values': image_inputs['pixel_values'].squeeze(0),
-                'image_path': row[self.view_position],
-                'label': row.get('kl_grade', -1),  # Use kl_severity column for KL grade
-                'impression': row.get('impression', '')
-            }
-        except Exception as e:
-            print(f"Error loading {row[self.view_position]}: {e}")
-            # Return dummy data for failed images
-            dummy_image = Image.new('RGB', (self.image_size, self.image_size), color='black')
-            image_inputs = self.processor(images=dummy_image, return_tensors="pt")
-            return {
-                'pixel_values': image_inputs['pixel_values'].squeeze(0),
-                'image_path': row[self.view_position],
-                'label': row.get('kl_grade', -1),  # Use kl_severity column for KL grade
-                'impression': row.get('impression', '')
-            }
+        
+        # Create channel-stacked image
+        image = self.create_channel_stacked_image(row)
+        
+        # Process image
+        image_inputs = self.processor(images=image, return_tensors="pt")
+        
+        return {
+            'pixel_values': image_inputs['pixel_values'].squeeze(0),
+            'image_path': f"channel_stacked_{idx}",  # Identifier for channel-stacked image
+            'label': row.get('kl_grade', -1),
+            'impression': row.get('impression', '')
+        }
 
 # Create evaluation dataset and dataloader
 eval_dataset = EvaluationDataset(
     test_df, 
     processor, 
-    CONFIG['image_size'],
-    CONFIG['view_position']
+    CONFIG['image_size']
 )
 eval_loader = DataLoader(
     eval_dataset,
@@ -244,7 +284,7 @@ eval_loader = DataLoader(
 )
 
 print(f"📦 Evaluation dataset created:")
-print(f"  - View position: {CONFIG['view_position']}")
+print(f"  - Using channel-stacked images (AP=Channel0, PA=Channel1, Skyline=Channel2)")
 print(f"  - Total samples: {len(eval_dataset)}")
 print(f"  - Batch size: {CONFIG['batch_size']}")
 print(f"  - Total batches: {len(eval_loader)}")
@@ -428,9 +468,8 @@ multiclass_results = multiclass_zero_shot_evaluation(
 if multiclass_results:
     # Overall accuracy display
     accuracy = multiclass_results['accuracy']
-    view_name = CONFIG['view_position'].upper()
     print("\n" + "="*80)
-    print(f"🎯 ZERO-SHOT EVALUATION RESULTS - {view_name} VIEW".center(80))
+    print("🎯 ZERO-SHOT EVALUATION RESULTS - CHANNEL STACKED".center(80))
     print("="*80)
     print(f"🔥 OVERALL ACCURACY: {accuracy:.4f} ({accuracy*100:.2f}%)".center(80))
     print("="*80)
@@ -494,7 +533,6 @@ if multiclass_results:
     print(f"   • Total test samples: {len(multiclass_results['valid_indices'])}")
     print(f"   • Macro F1-Score: {macro_avg.get('f1-score', 0):.3f}")
     print(f"   • Weighted F1-Score: {weighted_avg.get('f1-score', 0):.3f}")
-    print(f"   • View position: {CONFIG['view_position'].upper()}")
     
 else:
     print("❌ No valid results - check your data labels")
@@ -517,7 +555,7 @@ if multiclass_results and 'confusion_matrix' in multiclass_results:
         cbar_kws={'label': 'Count'}
     )
     
-    plt.title('Confusion Matrix - Zero-shot OA Classification', fontsize=16, pad=20)
+    plt.title('Confusion Matrix - Zero-shot OA Classification (Channel Stacked)', fontsize=16, pad=20)
     plt.ylabel('True Label', fontsize=14)
     plt.xlabel('Predicted Label', fontsize=14)
     plt.xticks(rotation=45)
@@ -525,9 +563,14 @@ if multiclass_results and 'confusion_matrix' in multiclass_results:
     plt.tight_layout()
     
     # Save the plot
-    confusion_matrix_path = os.path.join(view_output_dir, f'confusion_matrix_{CONFIG["view_position"]}.png')
+    confusion_matrix_path = os.path.join(channel_output_dir, 'confusion_matrix_channel_stacked.png')
     plt.savefig(confusion_matrix_path, dpi=300, bbox_inches='tight')
-    print(f"💾 Confusion matrix saved to: {confusion_matrix_path}")
+    
+    print("\n" + "="*80)
+    print("💾 CONFUSION MATRIX SAVED".center(80))
+    print("="*80)
+    print(f"📊 File: {confusion_matrix_path}".center(80))
+    print("="*80)
     
     plt.show()
 else:
@@ -535,49 +578,111 @@ else:
 
 # Save evaluation results to file
 if multiclass_results:
-    results_file = os.path.join(view_output_dir, f'evaluation_results_{CONFIG["view_position"]}.txt')
-    with open(results_file, 'w') as f:
-        f.write(f"Zero-shot Evaluation Results - {CONFIG['view_position'].upper()} View\n")
-        f.write("=" * 60 + "\n")
-        f.write(f"Model: {CONFIG['model_path']}\n")
-        f.write(f"View Position: {CONFIG['view_position']}\n")
-        f.write(f"Test Samples: {len(multiclass_results['valid_indices'])}\n")
-        f.write(f"Accuracy: {multiclass_results['accuracy']:.4f}\n\n")
-        
-        f.write("Per-class Performance:\n")
-        for class_name, metrics in multiclass_results['classification_report'].items():
-            if isinstance(metrics, dict) and 'f1-score' in metrics:
-                f.write(f"  {class_name}:\n")
-                f.write(f"    Precision: {metrics['precision']:.3f}\n")
-                f.write(f"    Recall: {metrics['recall']:.3f}\n")
-                f.write(f"    F1-score: {metrics['f1-score']:.3f}\n")
-                f.write(f"    Support: {metrics['support']}\n")
+    results_file = os.path.join(channel_output_dir, 'evaluation_results_channel_stacked.txt')
     
-    print(f"📄 Detailed results saved to: {results_file}")
+    # Extract metrics for beautiful file formatting
+    accuracy = multiclass_results['accuracy']
+    class_report = multiclass_results['classification_report']
+    macro_avg = class_report.get('macro avg', {})
+    weighted_avg = class_report.get('weighted avg', {})
+    class_names = multiclass_results['class_names']
+    ordered_classes = sorted(class_names.keys())
+    
+    with open(results_file, 'w') as f:
+        # Beautiful header for saved file
+        f.write("="*80 + "\n")
+        f.write("🎯 ZERO-SHOT EVALUATION RESULTS - CHANNEL STACKED\n".center(80))
+        f.write("="*80 + "\n\n")
+        
+        # Model information
+        f.write("📋 MODEL INFORMATION:\n")
+        f.write("─"*50 + "\n")
+        f.write(f"Model Path: {CONFIG['model_path']}\n")
+        f.write(f"View Type: Channel Stacked (AP=Ch0, PA=Ch1, Skyline=Ch2)\n")
+        f.write(f"Test Samples: {len(multiclass_results['valid_indices'])}\n")
+        f.write(f"Image Size: {CONFIG['image_size']}x{CONFIG['image_size']}\n")
+        f.write(f"Batch Size: {CONFIG['batch_size']}\n")
+        f.write(f"Device: {CONFIG['device']}\n\n")
+        
+        # Overall performance
+        f.write("🔥 OVERALL PERFORMANCE:\n")
+        f.write("─"*50 + "\n")
+        f.write(f"Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)\n")
+        f.write(f"Macro F1-Score: {macro_avg.get('f1-score', 0):.4f}\n")
+        f.write(f"Weighted F1-Score: {weighted_avg.get('f1-score', 0):.4f}\n\n")
+        
+        # Summary metrics table
+        f.write("📊 SUMMARY METRICS:\n")
+        f.write("─"*50 + "\n")
+        f.write(f"{'Metric':<15} {'Macro Avg':<12} {'Weighted Avg':<12}\n")
+        f.write("─"*50 + "\n")
+        f.write(f"{'Precision':<15} {macro_avg.get('precision', 0):<12.3f} {weighted_avg.get('precision', 0):<12.3f}\n")
+        f.write(f"{'Recall':<15} {macro_avg.get('recall', 0):<12.3f} {weighted_avg.get('recall', 0):<12.3f}\n")
+        f.write(f"{'F1-Score':<15} {macro_avg.get('f1-score', 0):<12.3f} {weighted_avg.get('f1-score', 0):<12.3f}\n\n")
+        
+        # Per-class performance
+        f.write("🏆 PER-CLASS PERFORMANCE:\n")
+        f.write("─"*65 + "\n")
+        f.write(f"{'Class':<12} {'Precision':<11} {'Recall':<11} {'F1-Score':<11} {'Support':<8}\n")
+        f.write("─"*65 + "\n")
+        
+        for class_id in ordered_classes:
+            class_name = class_names[class_id]
+            if class_name in class_report:
+                metrics = class_report[class_name]
+                if isinstance(metrics, dict) and 'f1-score' in metrics:
+                    precision = metrics['precision']
+                    recall = metrics['recall']
+                    f1_score = metrics['f1-score']
+                    support = metrics['support']
+                    
+                    # Add performance indicator
+                    indicator = "🟢" if f1_score >= 0.8 else "🟡" if f1_score >= 0.6 else "🔴"
+                    
+                    f.write(f"{indicator} {class_name:<9} {precision:<11.3f} {recall:<11.3f} {f1_score:<11.3f} {support:<8}\n")
+        
+        f.write("\n" + "─"*65 + "\n")
+        f.write("🟢 Excellent (F1 ≥ 0.8)   🟡 Good (0.6 ≤ F1 < 0.8)   🔴 Needs Improvement (F1 < 0.6)\n")
+        f.write("="*80 + "\n")
+    
+    print("\n" + "="*80)
+    print("📄 DETAILED RESULTS SAVED".center(80))
+    print("="*80)
+    print(f"📊 File: {results_file}".center(80))
+    print("="*80)
 
-print(f"\n🎉 Evaluation completed!")
-print(f"📁 All results saved in: {view_output_dir}")
+print("\n" + "🎊"*80)
+print("🎉 EVALUATION COMPLETED SUCCESSFULLY! 🎉".center(80))
+print("🎊"*80)
+print(f"📁 All results saved in: {channel_output_dir}".center(80))
+print("🎊"*80)
 
 # Print usage example
 print("\n" + "="*60)
 print("📖 USAGE EXAMPLES:")
 print("="*60)
-print("# Evaluate AP view with default settings:")
-print("python zeroshot_evaluation.py --view_position ap")
+print("# Basic channel-stacked evaluation with default settings:")
+print("python zeroshot_evaluation_channel.py")
 print()
-print("# Evaluate PA Rosen view with custom model:")
-print("python zeroshot_evaluation.py --view_position pa_rosen --model_path /path/to/model.pt")
+print("# Channel-stacked evaluation with custom model:")
+print("python zeroshot_evaluation_channel.py --model_path /path/to/model.pt")
 print()
-print("# Evaluate Skyline view with custom device and batch size:")
-print("python zeroshot_evaluation.py --view_position skyline --device cuda:1 --batch_size 32")
+print("# Channel-stacked evaluation with custom device and batch size:")
+print("python zeroshot_evaluation_channel.py --device cuda:1 --batch_size 32")
 print()
-print("# Full custom evaluation:")
-print("python zeroshot_evaluation.py \\")
+print("# Full custom channel-stacked evaluation:")
+print("python zeroshot_evaluation_channel.py \\")
 print("    --model_path /custom/path/model.pt \\")
-print("    --view_position ap \\")
 print("    --data_path custom_test.csv \\")
 print("    --image_size 384 \\")
 print("    --batch_size 8 \\")
 print("    --device cuda:0 \\")
 print("    --output_dir custom_results")
+print()
+print("📋 CHANNEL STACKING:")
+print("┌─────────────────────┐")
+print("│ Channel 0: AP View  │")
+print("│ Channel 1: PA View  │")
+print("│ Channel 2: Skyline  │")
+print("└─────────────────────┘")
 print("="*60)

@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument('--project_name', type=str, default='knee-siglip', help='Wandb project name')
     parser.add_argument('--experiment_name', type=str, default=None, help='Wandb experiment name')
     parser.add_argument('--image_size', type=int, choices=[224, 384, 512], default=224, help='Image resolution (224, 384, or 512)')
-    parser.add_argument('--max_text_length', type=int, default=64, help='Maximum text length for tokenization')
+    parser.add_argument('--max_text_length', type=int, default=128, help='Maximum text length for tokenization')
     parser.add_argument('--checkpoint_dir', type=str, default='/model/workspace/msk/checkpoints', help='Directory to save checkpoints')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help='Gradient accumulation steps')
     parser.add_argument('--mixed_precision', action='store_true', help='Use mixed precision training')

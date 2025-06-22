@@ -59,8 +59,8 @@ class KneeXrayDataset(Dataset):
         
         # Filter out rows with missing image paths or impressions
         self.df = self.df.dropna(subset=['img_path', 'impression'])
+        self.df = self.df[self.df['label'] == 2].reset_index(drop=True) #all
         # self.df = self.df[self.df['label'] != 4].reset_index(drop=True) #all
-        self.df = self.df[self.df['label'] != 4].reset_index(drop=True) #all
         print(f"Dataset size after filtering: {len(self.df)}")
         
     def __len__(self):
@@ -72,6 +72,7 @@ class KneeXrayDataset(Dataset):
         impression = str(row['impression'])
         label = row['label']
         oa_prompt = get_oa_prompts(label)
+        oa_prompt = ''
         impression = oa_prompt + impression
         
         try:
