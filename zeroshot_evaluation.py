@@ -26,13 +26,13 @@ def parse_arguments():
     
     parser.add_argument('--model_path', 
                        type=str, 
-                       default='/model/workspace/msk/checkpoints/pa/best_model_weights.pt',
+                       default='/model/workspace/msk/checkpoints/all/best_model_weights.pt',
                        help='Path to the trained model weights')
     
     parser.add_argument('--view_position', 
                        type=str, 
                        choices=['ap', 'pa_rosen', 'skyline'],
-                       default='pa_rosen',
+                       default='ap',
                        help='View position to evaluate (ap, pa_rosen, or skyline)')
     
     parser.add_argument('--data_path', 
@@ -52,7 +52,7 @@ def parse_arguments():
     
     parser.add_argument('--device', 
                        type=str, 
-                       default='cuda:2',
+                       default='cuda',
                        help='Device to use for evaluation (e.g., cuda:0, cuda:1, cpu)')
     
     parser.add_argument('--output_dir', 
